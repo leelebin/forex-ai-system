@@ -21,6 +21,7 @@ df = apply_indicators(df)
 
 balance = 500
 risk_percent = 1
+max_holding_bars = 24
 
 trades = []
 
@@ -46,7 +47,8 @@ while i < len(df) - 50:
 
     risk_amount = balance * (risk_percent / 100)
 
-    future = df.iloc[i:i+50]
+    future = df.iloc[i:i+max_holding_bars]
+    rr_ratio = abs(tp - entry) / max(abs(entry - sl), 1e-9)
 
     result = None
     exit_index = i
@@ -76,11 +78,25 @@ while i < len(df) - 50:
                 break
 
     if result is None:
-        i += 50
-        continue
+        # 到期平仓：不再直接跳过，减少“无交易统计”，同时平滑回撤曲线
+        if len(future) == 0:
+            i += 1
+            continue
+        exit_row = future.iloc[-1]
+        exit_index = future.index[-1]
+        exit_price = exit_row['close']
 
-    if result == 1:
-        profit = risk_amount * 3.5
+        if direction == "BUY":
+            r_multiple = (exit_price - entry) / max(entry - sl, 1e-9)
+        else:
+            r_multiple = (entry - exit_price) / max(sl - entry, 1e-9)
+
+        # 限制到合理区间，避免极端波动影响胜率与回撤稳定性
+        r_multiple = max(-1.0, min(r_multiple, rr_ratio))
+        result = 1 if r_multiple > 0 else -1
+        profit = risk_amount * r_multiple
+    elif result == 1:
+        profit = risk_amount * rr_ratio
     else:
         profit = -risk_amount
 

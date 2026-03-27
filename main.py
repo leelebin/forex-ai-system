@@ -6,13 +6,13 @@ import MetaTrader5 as mt5
 from data.mt5_connector import connect, get_data
 from strategy.indicators import apply_indicators
 from strategy.signal_generator import generate_signal
-#from ai.news_fetcher import fetch_news
-#from ai.news_analyzer import analyze_news
+# from ai.news_fetcher import fetch_news
+# from ai.news_analyzer import analyze_news
 from notifier.telegram import send
 from execution.mt5_trader import place_trade, manage_positions
 from risk_manager import calculate_lot
 
-print("🚀 V13 自动交易系统启动")
+print("🚀 V14 自动交易系统启动（动态TP/SL + M1微结构）")
 
 with open("config.json") as f:
     cfg = json.load(f)
@@ -20,27 +20,30 @@ with open("config.json") as f:
 connect(cfg)
 
 cooldown = {}
+risk_percent = float(cfg.get("risk_percent", 2.0))
 
 while True:
     manage_positions()
 
     print("\n🔄 新一轮扫描")
 
-    #news = fetch_news()
-    #bias = analyze_news(news, cfg["ollama_model"])
+    # news = fetch_news()
+    # bias = analyze_news(news, cfg["ollama_model"])
     bias = "neutral"
 
     for s in cfg["symbols"]:
         df = pd.DataFrame(get_data(s, "M5"))
         df_h1 = pd.DataFrame(get_data(s, "H1"))
+        df_m1 = pd.DataFrame(get_data(s, "M1", n=1500))
 
-        if df.empty or df_h1.empty:
+        if df.empty or df_h1.empty or df_m1.empty:
             continue
 
         df = apply_indicators(df)
         df_h1 = apply_indicators(df_h1)
+        df_m1 = apply_indicators(df_m1)
 
-        sig = generate_signal(df, bias, s, df_h1=df_h1)
+        sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1)
 
         print("信号:", s, sig)
 
@@ -55,23 +58,24 @@ while True:
 
             lot = calculate_lot(
                 s,
-                sig['sl'],
-                sig['entry'],
+                sig["sl"],
+                sig["entry"],
                 balance,
-                risk_percent=1
+                risk_percent=risk_percent,
             )
 
             place_trade(
                 s,
-                sig['direction'],
+                sig["direction"],
                 lot,
-                sig['sl'],
-                sig['tp']
+                sig["sl"],
+                sig["tp"],
             )
 
             strategy_text = " / ".join(sig.get("strategy_labels", ["技术面"]))
             reason_text = sig.get("reason", "无详细原因")
             confidence_text = sig.get("confidence", "N/A")
+            dynamic_rr = sig.get("dynamic_rr", "N/A")
             msg = f"""
 🚨 自动交易执行
 
@@ -82,6 +86,7 @@ SL: {sig['sl']}
 TP: {sig['tp']}
 Lot: {lot}
 Confidence: {confidence_text}
+Dynamic RR: 1:{dynamic_rr}
 
 策略组合: {strategy_text}
 触发原因:

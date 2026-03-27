@@ -1,20 +1,39 @@
 {
   "symbols": [
-    "EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","USDCAD","NZDUSD",
-    "EURGBP","EURJPY","EURAUD","GBPJPY","GBPAUD","AUDJPY","CHFJPY",
-    "XAUUSD","XAGUSD",
+    "EURUSD",
+    "GBPUSD",
+    "USDJPY",
+    "USDCHF",
+    "AUDUSD",
+    "USDCAD",
+    "NZDUSD",
+    "EURGBP",
+    "EURJPY",
+    "EURAUD",
+    "GBPJPY",
+    "GBPAUD",
+    "AUDJPY",
+    "CHFJPY",
+    "XAUUSD",
+    "XAGUSD",
     "XBRUSD",
-    "US30","NAS100","SPX500","GER40","UK100",
-    "BTCUSD","ETHUSD",
-    "USDHKD","USDSGD","USDTRY","USDZAR"
+    "US30",
+    "NAS100",
+    "SPX500",
+    "GER40",
+    "UK100",
+    "BTCUSD",
+    "ETHUSD",
+    "USDHKD",
+    "USDSGD",
+    "USDTRY",
+    "USDZAR"
   ],
-
-  "mt5_login":230044684,
-  "mt5_password":"tE@G6huM",
-  "mt5_server":"Elev8-Demo2",
-  
-  "telegram_token":"8081442172:AAG20CBdqzVRdGuLTivqTmUZl7Qp-oT1q0E",
-  "telegram_chat_id":"1752223204",
-  
-  "ollama_model":"qwen3:8b"
+  "mt5_login": 230044684,
+  "mt5_password": "tE@G6huM",
+  "mt5_server": "Elev8-Demo2",
+  "telegram_token": "8081442172:AAG20CBdqzVRdGuLTivqTmUZl7Qp-oT1q0E",
+  "telegram_chat_id": "1752223204",
+  "ollama_model": "qwen3:8b",
+  "risk_percent": 3.0
 }

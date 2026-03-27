@@ -82,7 +82,7 @@ def place_trade(symbol, direction, lot, sl, tp):
         "magic": 123456,
         "comment": "AI Trade",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_FOK,
+        "type_filling": filling,
     }
 
     result = mt5.order_send(request)
@@ -155,7 +155,12 @@ def manage_positions():
         tp = pos.tp
         profit = pos.profit
 
+        if sl is None or sl == 0:
+            continue
+
         risk = abs(entry - sl)
+        if risk <= 0:
+            continue
 
         # =========================
         # 🔥 1. TP1 锁利润

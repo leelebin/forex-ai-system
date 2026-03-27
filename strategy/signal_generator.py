@@ -8,7 +8,9 @@ def load_params():
     return {
         "rsi_buy": 52,
         "rsi_sell": 48,
-        "atr_min": 0.25
+        "atr_min": 0.25,
+        "atr_sl_multiplier": 1.3,
+        "rr_ratio": 2.4
     }
 
 
@@ -26,6 +28,7 @@ def generate_signal(df, news, symbol, df_h1=None, backtest=False):
     rsi = last['rsi']
     price = last['close']
     atr = last['atr']
+    prev_rsi = prev['rsi']
 
     prev_price = prev['close']
 
@@ -49,10 +52,18 @@ def generate_signal(df, news, symbol, df_h1=None, backtest=False):
     # =========================
     # 🔥 3. 入场逻辑（唯一版本）
     # =========================
-    if trend > 0 and 45 < rsi < 55 and price > ema_fast and prev_price > ema_fast:
+    buy_rsi_floor = max(params["rsi_buy"] - 5, 40)
+    sell_rsi_ceil = min(params["rsi_sell"] + 5, 60)
+
+    bullish_retest = price > ema_fast and prev_price > ema_fast
+    bearish_retest = price < ema_fast and prev_price < ema_fast
+    rsi_up = rsi > prev_rsi
+    rsi_down = rsi < prev_rsi
+
+    if trend > 0 and buy_rsi_floor <= rsi <= params["rsi_buy"] and bullish_retest and rsi_up:
         direction = "BUY"
 
-    elif trend < 0 and 45 < rsi < 55 and price < ema_fast and prev_price < ema_fast:
+    elif trend < 0 and params["rsi_sell"] <= rsi <= sell_rsi_ceil and bearish_retest and rsi_down:
         direction = "SELL"
 
     else:
@@ -68,8 +79,8 @@ def generate_signal(df, news, symbol, df_h1=None, backtest=False):
     # =========================
     # 🔥 5. TP / SL（固定结构）
     # =========================
-    sl_distance = atr * 1.2
-    tp_distance = atr * 3.5
+    sl_distance = atr * params["atr_sl_multiplier"]
+    tp_distance = sl_distance * params["rr_ratio"]
 
     if direction == "BUY":
         sl = price - sl_distance

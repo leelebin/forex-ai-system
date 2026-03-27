@@ -69,6 +69,9 @@ while True:
                 sig['tp']
             )
 
+            strategy_text = " / ".join(sig.get("strategy_labels", ["技术面"]))
+            reason_text = sig.get("reason", "无详细原因")
+            confidence_text = sig.get("confidence", "N/A")
             msg = f"""
 🚨 自动交易执行
 
@@ -77,8 +80,12 @@ while True:
 Entry: {sig['entry']}
 SL: {sig['sl']}
 TP: {sig['tp']}
+Lot: {lot}
+Confidence: {confidence_text}
 
-策略: 技术面
+策略组合: {strategy_text}
+触发原因:
+{reason_text}
 """
 
             send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)

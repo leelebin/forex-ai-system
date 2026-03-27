@@ -40,9 +40,11 @@ def generate_signal(df, news, symbol, df_h1=None, backtest=False):
     # =========================
     # 🔥 2. H1趋势过滤
     # =========================
+    h1_alignment = None
     if df_h1 is not None and len(df_h1) > 50:
         h1_last = df_h1.iloc[-1]
         h1_trend = h1_last['ema_fast'] - h1_last['ema_slow']
+        h1_alignment = h1_trend
 
         if trend > 0 and h1_trend < 0:
             return None
@@ -70,9 +72,11 @@ def generate_signal(df, news, symbol, df_h1=None, backtest=False):
 
     if trend > 0 and buy_rsi_floor <= rsi <= params["rsi_buy"] and bullish_retest and rsi_up:
         direction = "BUY"
+        trigger_name = "多头回踩确认"
 
     elif trend < 0 and params["rsi_sell"] <= rsi <= sell_rsi_ceil and bearish_retest and rsi_down:
         direction = "SELL"
+        trigger_name = "空头回踩确认"
 
     else:
         return None
@@ -97,11 +101,43 @@ def generate_signal(df, news, symbol, df_h1=None, backtest=False):
         sl = price + sl_distance
         tp = price - tp_distance
 
+    trend_strength = abs(trend)
+    rsi_momentum = abs(rsi - prev_rsi)
+    confidence = int(min(95, max(50, 50 + trend_strength * 200 + rsi_momentum * 1.2)))
+
+    strategy_labels = ["技术面", "趋势跟随", "RSI动量", "ATR风控"]
+    if h1_alignment is not None:
+        strategy_labels.append("多周期共振")
+    if news != "neutral":
+        strategy_labels.append("消息面过滤")
+
+    reason_lines = [
+        f"触发模式: {trigger_name}",
+        f"趋势过滤(M5): ema_fast({ema_fast:.5f}) {'>' if direction == 'BUY' else '<'} ema_slow({ema_slow:.5f})",
+        f"RSI条件: 当前 {rsi:.2f}, 前值 {prev_rsi:.2f}, {'上行' if direction == 'BUY' else '下行'}动量成立",
+        f"价格位置: 当前 {price:.5f}, 前值 {prev_price:.5f}, 位于ema_fast同侧",
+        f"波动率(ATR): {atr:.5f} (阈值 {params['atr_min']})",
+        f"风报比: 1:{params['rr_ratio']}"
+    ]
+
+    if h1_alignment is not None:
+        reason_lines.append(
+            f"H1过滤: ema_fast-ema_slow={h1_alignment:.5f}, 与M5方向一致"
+        )
+    else:
+        reason_lines.append("H1过滤: 数据不足，跳过多周期确认")
+
+    if news == "neutral":
+        reason_lines.append("消息面: 当前未启用新闻偏置过滤")
+    else:
+        reason_lines.append(f"消息面: 新闻偏置={news}")
+
     return {
         "direction": direction,
         "entry": round(price, 5),
         "sl": round(sl, 5),
         "tp": round(tp, 5),
-        "confidence": 50,
-        "reason": "趋势突破确认"
+        "confidence": confidence,
+        "reason": " | ".join(reason_lines),
+        "strategy_labels": strategy_labels
     }

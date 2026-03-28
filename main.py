@@ -10,7 +10,8 @@ from strategy.signal_generator import generate_signal
 # from ai.news_analyzer import analyze_news
 from notifier.telegram import send
 from execution.mt5_trader import place_trade, manage_positions
-from risk_manager import calculate_lot
+from risk_manager import RiskManager, calculate_lot
+from news_filter import NewsFilter
 
 print("🚀 V14 自动交易系统启动（动态TP/SL + M1微结构）")
 
@@ -22,6 +23,8 @@ connect(cfg)
 cooldown = {}
 risk_percent = float(cfg.get("risk_percent", 2.0))
 scan_round = 0
+news_filter = NewsFilter(cfg)
+risk_manager = RiskManager(cfg)
 
 while True:
     scan_round += 1
@@ -79,6 +82,24 @@ Dynamic RR: 1:{dynamic_rr}
                     f"⏳ {s} 检测到机会但未下单：冷却中，剩余 {remain_sec} 秒。"
                 )
                 send(cfg["telegram_token"], cfg["telegram_chat_id"], cooldown_msg)
+                continue
+
+            news_gate = news_filter.should_block(s)
+            if news_gate.get("blocked"):
+                msg = (
+                    f"📰 {s} 信号被新闻过滤拦截: {news_gate.get('reason')} "
+                    f"(恢复时间: {news_gate.get('resume_at_utc', 'N/A')})"
+                )
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
+                continue
+
+            risk_gate = risk_manager.should_block(s, df_m1=df_m1)
+            if risk_gate.get("blocked"):
+                msg = (
+                    f"🛡️ {s} 信号被风控拦截: {risk_gate.get('reason')} "
+                    f"(恢复时间: {risk_gate.get('resume_at_utc', 'N/A')})"
+                )
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
                 continue
 
             account = mt5.account_info()

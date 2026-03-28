@@ -35,5 +35,47 @@
   "telegram_token": "8081442172:AAG20CBdqzVRdGuLTivqTmUZl7Qp-oT1q0E",
   "telegram_chat_id": "1752223204",
   "ollama_model": "qwen3:8b",
-  "risk_percent": 3.0
+  "risk_percent": 3.0,
+  "news_filter": {
+    "enabled": true,
+    "high_impact_only": true,
+    "pre_news_block_min": 45,
+    "post_news_block_min": 30,
+    "refresh_interval_sec": 180,
+    "fallback_mode": "fail_open",
+    "providers": {
+      "tradingeconomics": {
+        "enabled": false,
+        "endpoint": ""
+      },
+      "forex_factory": {
+        "enabled": false,
+        "endpoint": ""
+      },
+      "investing": {
+        "enabled": false,
+        "endpoint": ""
+      },
+      "newsapi": {
+        "enabled": false,
+        "endpoint": ""
+      }
+    }
+  },
+  "risk_manager": {
+    "enabled": true,
+    "atr": {
+      "enabled": true,
+      "spike_ratio": 2.0,
+      "lookback": 20,
+      "cooldown_min": 20
+    },
+    "spread": {
+      "enabled": true,
+      "abs_max": 0.0,
+      "spike_ratio": 2.5,
+      "window": 40,
+      "cooldown_min": 15
+    }
+  }
 }

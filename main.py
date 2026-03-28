@@ -127,11 +127,17 @@ Dynamic RR: 1:{dynamic_rr}
                     if isinstance(trade_result, dict)
                     else "未知错误"
                 )
+                fail_code = (
+                    trade_result.get("code", "N/A")
+                    if isinstance(trade_result, dict)
+                    else "N/A"
+                )
                 fail_msg = f"""
 ❌ 自动下单失败（第 {scan_round} 轮）
 
 {s} {sig['direction']}
 Lot: {lot}
+错误码: {fail_code}
 失败原因: {fail_reason}
 触发原因:
 {reason_text}

@@ -46,7 +46,61 @@ def _get_m1_reversal_signal(symbol):
     }
 
 
+def _check_trading_enabled():
+    terminal = mt5.terminal_info()
+    if terminal is None:
+        return {
+            "ok": False,
+            "reason": "terminal_info 获取失败，无法确认交易开关状态",
+            "code": "TERMINAL_INFO_UNAVAILABLE",
+        }
+
+    if not getattr(terminal, "trade_allowed", True):
+        return {
+            "ok": False,
+            "reason": (
+                "AutoTrading disabled by client。请在 MT5 顶部工具栏开启“Algo Trading/自动交易”按钮，"
+                "并在 EA 属性里勾选“允许算法交易”。"
+            ),
+            "code": "AUTOTRADING_DISABLED_CLIENT",
+        }
+
+    account = mt5.account_info()
+    if account is None:
+        return {
+            "ok": False,
+            "reason": "account_info 获取失败，无法确认账户交易权限",
+            "code": "ACCOUNT_INFO_UNAVAILABLE",
+        }
+
+    if not getattr(account, "trade_allowed", True):
+        return {
+            "ok": False,
+            "reason": "账户当前不允许交易（trade_allowed=False），请检查账号权限或联系券商。",
+            "code": "ACCOUNT_TRADE_DISABLED",
+        }
+
+    if not getattr(account, "trade_expert", True):
+        return {
+            "ok": False,
+            "reason": "账户未允许EA自动交易（trade_expert=False），请在MT5与账户端开启EA交易权限。",
+            "code": "ACCOUNT_EXPERT_DISABLED",
+        }
+
+    return {"ok": True}
+
+
 def place_trade(symbol, direction, lot, sl, tp):
+    trading_gate = _check_trading_enabled()
+    if not trading_gate.get("ok"):
+        reason = trading_gate.get("reason", "交易权限检查未通过")
+        print(f"❌ 下单前检查失败: {reason}")
+        return {
+            "ok": False,
+            "reason": reason,
+            "code": trading_gate.get("code"),
+        }
+
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
         reason = "Symbol not found"

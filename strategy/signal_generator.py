@@ -60,13 +60,23 @@ def _m1_entry_filter(direction, df_m1):
     m1_rsi = m1_last["rsi"]
 
     if direction == "BUY":
-        ok = m1_fast >= m1_slow and m1_price >= m1_fast and m1_rsi >= 48 and m1_price >= m1_prev_price
+        ok = (
+            m1_fast >= m1_slow
+            and m1_price >= m1_fast
+            and m1_rsi >= 46
+            and m1_price >= (m1_prev_price * 0.9998)
+        )
         msg = (
             f"M1过滤(BUY): ema_fast({m1_fast:.5f})>=ema_slow({m1_slow:.5f}), "
             f"price={m1_price:.5f}, rsi={m1_rsi:.2f}"
         )
     else:
-        ok = m1_fast <= m1_slow and m1_price <= m1_fast and m1_rsi <= 52 and m1_price <= m1_prev_price
+        ok = (
+            m1_fast <= m1_slow
+            and m1_price <= m1_fast
+            and m1_rsi <= 54
+            and m1_price <= (m1_prev_price * 1.0002)
+        )
         msg = (
             f"M1过滤(SELL): ema_fast({m1_fast:.5f})<=ema_slow({m1_slow:.5f}), "
             f"price={m1_price:.5f}, rsi={m1_rsi:.2f}"
@@ -114,12 +124,12 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
         rsi_up = rsi >= prev_rsi - 0.8
         rsi_down = rsi <= prev_rsi + 0.8
     else:
-        buy_rsi_floor = max(params["rsi_buy"] - 5, 40)
-        sell_rsi_ceil = min(params["rsi_sell"] + 5, 60)
-        bullish_retest = price > ema_fast and prev_price > ema_fast
-        bearish_retest = price < ema_fast and prev_price < ema_fast
-        rsi_up = rsi > prev_rsi
-        rsi_down = rsi < prev_rsi
+        buy_rsi_floor = max(params["rsi_buy"] - 7, 39)
+        sell_rsi_ceil = min(params["rsi_sell"] + 7, 61)
+        bullish_retest = price > ema_fast or prev_price > ema_fast
+        bearish_retest = price < ema_fast or prev_price < ema_fast
+        rsi_up = rsi >= prev_rsi - 0.3
+        rsi_down = rsi <= prev_rsi + 0.3
 
     if trend > 0 and buy_rsi_floor <= rsi <= params["rsi_buy"] and bullish_retest and rsi_up:
         direction = "BUY"

@@ -21,11 +21,13 @@ connect(cfg)
 
 cooldown = {}
 risk_percent = float(cfg.get("risk_percent", 2.0))
+scan_round = 0
 
 while True:
+    scan_round += 1
     manage_positions()
 
-    print("\n🔄 新一轮扫描")
+    print(f"\n🔄 新一轮扫描（第 {scan_round} 轮）")
 
     # news = fetch_news()
     # bias = analyze_news(news, cfg["ollama_model"])
@@ -48,9 +50,35 @@ while True:
         print("信号:", s, sig)
 
         if sig:
+            strategy_text = " / ".join(sig.get("strategy_labels", ["技术面"]))
+            reason_text = sig.get("reason", "无详细原因")
+            confidence_text = sig.get("confidence", "N/A")
+            dynamic_rr = sig.get("dynamic_rr", "N/A")
+
+            setup_msg = f"""
+👀 检测到进场机会（第 {scan_round} 轮）
+
+{s} {sig['direction']}
+Entry: {sig['entry']}
+SL: {sig['sl']}
+TP: {sig['tp']}
+Confidence: {confidence_text}
+Dynamic RR: 1:{dynamic_rr}
+
+策略组合: {strategy_text}
+触发原因:
+{reason_text}
+"""
+            send(cfg["telegram_token"], cfg["telegram_chat_id"], setup_msg)
+
             now = time.time()
 
             if s in cooldown and now - cooldown[s] < 300:
+                remain_sec = int(300 - (now - cooldown[s]))
+                cooldown_msg = (
+                    f"⏳ {s} 检测到机会但未下单：冷却中，剩余 {remain_sec} 秒。"
+                )
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], cooldown_msg)
                 continue
 
             account = mt5.account_info()
@@ -64,7 +92,7 @@ while True:
                 risk_percent=risk_percent,
             )
 
-            place_trade(
+            trade_result = place_trade(
                 s,
                 sig["direction"],
                 lot,
@@ -72,11 +100,25 @@ while True:
                 sig["tp"],
             )
 
-            strategy_text = " / ".join(sig.get("strategy_labels", ["技术面"]))
-            reason_text = sig.get("reason", "无详细原因")
-            confidence_text = sig.get("confidence", "N/A")
-            dynamic_rr = sig.get("dynamic_rr", "N/A")
-            msg = f"""
+            if not trade_result or not trade_result.get("ok"):
+                fail_reason = (
+                    trade_result.get("reason", "未知错误")
+                    if isinstance(trade_result, dict)
+                    else "未知错误"
+                )
+                fail_msg = f"""
+❌ 自动下单失败（第 {scan_round} 轮）
+
+{s} {sig['direction']}
+Lot: {lot}
+失败原因: {fail_reason}
+触发原因:
+{reason_text}
+"""
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], fail_msg)
+                continue
+
+            success_msg = f"""
 🚨 自动交易执行
 
 {s} {sig['direction']}
@@ -93,7 +135,7 @@ Dynamic RR: 1:{dynamic_rr}
 {reason_text}
 """
 
-            send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
+            send(cfg["telegram_token"], cfg["telegram_chat_id"], success_msg)
 
             cooldown[s] = now
 

@@ -49,8 +49,9 @@ def _get_m1_reversal_signal(symbol):
 def place_trade(symbol, direction, lot, sl, tp):
     symbol_info = mt5.symbol_info(symbol)
     if symbol_info is None:
-        print("❌ Symbol not found")
-        return
+        reason = "Symbol not found"
+        print(f"❌ {reason}")
+        return {"ok": False, "reason": reason}
 
     if not symbol_info.visible:
         mt5.symbol_select(symbol, True)
@@ -58,14 +59,16 @@ def place_trade(symbol, direction, lot, sl, tp):
     tick = mt5.symbol_info_tick(symbol)
 
     if tick is None:
-        print("❌ tick 获取失败")
-        return
+        reason = "tick 获取失败"
+        print(f"❌ {reason}")
+        return {"ok": False, "reason": reason}
 
     price = tick.ask if direction == "BUY" else tick.bid
 
     if price is None:
-        print("❌ price is None")
-        return
+        reason = "price is None"
+        print(f"❌ {reason}")
+        return {"ok": False, "reason": reason}
 
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
 
@@ -121,13 +124,17 @@ def place_trade(symbol, direction, lot, sl, tp):
     result = mt5.order_send(request)
 
     if result is None:
-        print("❌ 下单失败: result is None")
+        reason = "result is None"
+        print(f"❌ 下单失败: {reason}")
+        return {"ok": False, "reason": reason}
     else:
         print("📊 下单返回:", result)
         print("retcode:", result.retcode)
 
         if result.retcode != mt5.TRADE_RETCODE_DONE:
-            print("❌ 下单失败原因:", result.comment)
+            reason = result.comment or f"retcode={result.retcode}"
+            print("❌ 下单失败原因:", reason)
+            return {"ok": False, "reason": reason, "retcode": result.retcode}
         else:
             print("✅ 下单成功")
 
@@ -140,6 +147,7 @@ def place_trade(symbol, direction, lot, sl, tp):
                 sl=sl,
                 tp=tp,
             )
+            return {"ok": True, "reason": "success", "retcode": result.retcode}
 
 
 def get_positions():

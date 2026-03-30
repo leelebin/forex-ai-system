@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import datetime, timezone
 import pandas as pd
 import MetaTrader5 as mt5
 
@@ -13,7 +14,14 @@ from execution.mt5_trader import place_trade, manage_positions
 from risk_manager import RiskManager, calculate_lot
 from news_filter import NewsFilter
 
-print("🚀 V14 自动交易系统启动（动态TP/SL + M1微结构）")
+
+def log_with_time(*messages):
+    now = datetime.now(timezone.utc).astimezone()
+    ts = now.strftime("%Y-%m-%d %H:%M:%S %z")
+    print(f"[{ts}]", *messages, flush=True)
+
+
+log_with_time("🚀 V14 自动交易系统启动（动态TP/SL + M1微结构）")
 
 with open("config.json") as f:
     cfg = json.load(f)
@@ -30,7 +38,7 @@ while True:
     scan_round += 1
     manage_positions()
 
-    print(f"\n🔄 新一轮扫描（第 {scan_round} 轮）")
+    log_with_time(f"\n🔄 新一轮扫描（第 {scan_round} 轮）")
 
     # news = fetch_news()
     # bias = analyze_news(news, cfg["ollama_model"])
@@ -50,7 +58,7 @@ while True:
 
         sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1)
 
-        print("信号:", s, sig)
+        log_with_time("信号:", s, sig)
 
         if sig:
             strategy_text = " / ".join(sig.get("strategy_labels", ["技术面"]))

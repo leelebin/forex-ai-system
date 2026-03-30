@@ -13,6 +13,40 @@ def _safe_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
 
+def _resolve_filling_modes(symbol_info):
+    """
+    Return candidate filling modes ordered by broker preference.
+
+    Some brokers (especially index/CFD symbols) reject unsupported
+    filling modes with 'Unsupported filling mode'. We detect available
+    modes from symbol metadata and provide fallbacks.
+    """
+    preferred = []
+
+    trade_fill_mode = getattr(symbol_info, "trade_fill_mode", None)
+    if trade_fill_mode in (mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_RETURN):
+        preferred.append(trade_fill_mode)
+
+    # In MT5 Python, symbol_info.filling_mode is usually a bitmask:
+    # 1 = FOK, 2 = IOC, 4 = RETURN.
+    mask = getattr(symbol_info, "filling_mode", None)
+    if isinstance(mask, int):
+        bit_to_mode = (
+            (1, mt5.ORDER_FILLING_FOK),
+            (2, mt5.ORDER_FILLING_IOC),
+            (4, mt5.ORDER_FILLING_RETURN),
+        )
+        for bit, mode in bit_to_mode:
+            if mask & bit and mode not in preferred:
+                preferred.append(mode)
+
+    for fallback in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+        if fallback not in preferred:
+            preferred.append(fallback)
+
+    return preferred
+
+
 def _get_m1_reversal_signal(symbol):
     rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 120)
     if rates is None or len(rates) < 40:
@@ -126,16 +160,7 @@ def place_trade(symbol, direction, lot, sl, tp):
 
     order_type = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
 
-    filling = mt5.ORDER_FILLING_RETURN
-
-    try:
-        if hasattr(symbol_info, "trade_fill_mode"):
-            if symbol_info.trade_fill_mode == mt5.ORDER_FILLING_FOK:
-                filling = mt5.ORDER_FILLING_FOK
-            elif symbol_info.trade_fill_mode == mt5.ORDER_FILLING_IOC:
-                filling = mt5.ORDER_FILLING_IOC
-    except Exception:
-        pass
+    filling_candidates = _resolve_filling_modes(symbol_info)
 
     point = symbol_info.point
 
@@ -172,26 +197,23 @@ def place_trade(symbol, direction, lot, sl, tp):
         "magic": 123456,
         "comment": "AI Trade",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": filling,
     }
 
-    result = mt5.order_send(request)
+    failure = None
+    for fill_mode in filling_candidates:
+        request["type_filling"] = fill_mode
+        result = mt5.order_send(request)
 
-    if result is None:
-        reason = "result is None"
-        print(f"❌ 下单失败: {reason}")
-        return {"ok": False, "reason": reason}
-    else:
-        print("📊 下单返回:", result)
+        if result is None:
+            failure = {"ok": False, "reason": "result is None", "retcode": None}
+            print("❌ 下单失败: result is None")
+            continue
+
+        print(f"📊 下单返回(type_filling={fill_mode}):", result)
         print("retcode:", result.retcode)
 
-        if result.retcode != mt5.TRADE_RETCODE_DONE:
-            reason = result.comment or f"retcode={result.retcode}"
-            print("❌ 下单失败原因:", reason)
-            return {"ok": False, "reason": reason, "retcode": result.retcode}
-        else:
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
             print("✅ 下单成功")
-
             log_trade(
                 action="OPEN",
                 symbol=symbol,
@@ -201,7 +223,19 @@ def place_trade(symbol, direction, lot, sl, tp):
                 sl=sl,
                 tp=tp,
             )
-            return {"ok": True, "reason": "success", "retcode": result.retcode}
+            return {"ok": True, "reason": "success", "retcode": result.retcode, "filling_mode": fill_mode}
+
+        reason = result.comment or f"retcode={result.retcode}"
+        failure = {"ok": False, "reason": reason, "retcode": result.retcode, "filling_mode": fill_mode}
+        print(f"❌ 下单失败原因(type_filling={fill_mode}):", reason)
+
+        # Unsupported filling mode => try next candidate
+        if "Unsupported filling mode" in reason:
+            continue
+
+        break
+
+    return failure or {"ok": False, "reason": "order_send failed with unknown reason"}
 
 
 def get_positions():

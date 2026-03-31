@@ -1,18 +1,23 @@
 import json
 import time
 from datetime import datetime, timezone
-import pandas as pd
-import MetaTrader5 as mt5
 
+import MetaTrader5 as mt5
+import pandas as pd
+
+from account_mode import get_account_mode, get_mode_controls
 from data.mt5_connector import connect, get_data
+from execution.mt5_trader import manage_positions, place_trade
+from loss_guard import LossGuard
+from news_filter import NewsFilter
+from notifier.telegram import send
+from pnl_engine import PnLEngine
+from position_manager import PositionManager
+from risk_manager import RiskManager, calculate_lot
+from risk_model import get_risk_percent
 from strategy.indicators import apply_indicators
 from strategy.signal_generator import generate_signal
-# from ai.news_fetcher import fetch_news
-# from ai.news_analyzer import analyze_news
-from notifier.telegram import send
-from execution.mt5_trader import place_trade, manage_positions
-from risk_manager import RiskManager, calculate_lot
-from news_filter import NewsFilter
+from trend_state import calculate_adx, get_ema_slope, get_trend_state
 
 
 def log_with_time(*messages):
@@ -29,10 +34,12 @@ with open("config.json") as f:
 connect(cfg)
 
 cooldown = {}
-risk_percent = float(cfg.get("risk_percent", 2.0))
 scan_round = 0
 news_filter = NewsFilter(cfg)
 risk_manager = RiskManager(cfg)
+pnl_engine = PnLEngine()
+loss_guard = LossGuard(threshold=2)
+position_manager = PositionManager()
 
 while True:
     scan_round += 1
@@ -43,6 +50,10 @@ while True:
     # news = fetch_news()
     # bias = analyze_news(news, cfg["ollama_model"])
     bias = "neutral"
+
+    account = mt5.account_info()
+    equity = float(getattr(account, "equity", 0.0) or 0.0)
+    pnl_snapshot = pnl_engine.update(equity)
 
     for s in cfg["symbols"]:
         df = pd.DataFrame(get_data(s, "M5"))
@@ -96,6 +107,26 @@ Dynamic RR: 1:{dynamic_rr}
                 send(cfg["telegram_token"], cfg["telegram_chat_id"], cooldown_msg)
                 continue
 
+            # 1) trend_state
+            adx_value = calculate_adx(df)
+            ema_slope = get_ema_slope(df, col="ema_fast")
+            trend = get_trend_state(adx_value, ema_slope)
+
+            # 2) account_mode
+            mode = get_account_mode(equity)
+            mode_controls = get_mode_controls(mode)
+
+            # 3) loss_guard
+            loss_gate = loss_guard.is_blocked(
+                symbol=s,
+                direction=sig["direction"],
+                trend_id=trend,
+            )
+            if loss_gate.get("blocked"):
+                msg = f"🧯 {s} 信号被连续亏损保护拦截: {loss_gate.get('reason')}"
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
+                continue
+
             news_gate = news_filter.should_block(s)
             if news_gate.get("blocked"):
                 msg = (
@@ -114,17 +145,36 @@ Dynamic RR: 1:{dynamic_rr}
                 send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
                 continue
 
-            account = mt5.account_info()
-            balance = account.balance
+            # 4) pnl_engine + risk_model
+            dynamic_risk_percent = get_risk_percent(
+                equity=equity,
+                drawdown=pnl_snapshot["drawdown"],
+                is_new_peak=pnl_snapshot["is_new_peak"],
+            )
+
+            # 5) position_manager
+            pos_gate = position_manager.can_open(
+                symbol=s,
+                direction=sig["direction"],
+                trend_state=trend,
+                account_mode=mode,
+                max_positions=mode_controls["max_positions"],
+                allow_pyramiding=mode_controls["allow_pyramiding"],
+            )
+            if not pos_gate.get("allowed"):
+                msg = f"📦 {s} 信号被持仓管理拦截: {pos_gate.get('reason')}"
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
+                continue
 
             lot = calculate_lot(
                 s,
                 sig["sl"],
                 sig["entry"],
-                balance,
-                risk_percent=risk_percent,
+                equity,
+                risk_percent=dynamic_risk_percent,
             )
 
+            # 6) execute
             trade_result = place_trade(
                 s,
                 sig["direction"],
@@ -166,6 +216,10 @@ Entry: {sig['entry']}
 SL: {sig['sl']}
 TP: {sig['tp']}
 Lot: {lot}
+Risk: {dynamic_risk_percent}%
+TrendState: {trend}
+AccountMode: {mode}
+Drawdown: {pnl_snapshot['drawdown']}%
 Confidence: {confidence_text}
 Dynamic RR: 1:{dynamic_rr}
 

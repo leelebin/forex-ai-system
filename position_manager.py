@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import MetaTrader5 as mt5
 
 
@@ -16,6 +14,7 @@ class PositionManager:
         account_mode: str,
         max_positions: int,
         allow_pyramiding: bool,
+        volatility_regime: str = "NORMAL",
     ) -> dict:
         positions = mt5.positions_get()
         positions = list(positions) if positions else []
@@ -34,8 +33,15 @@ class PositionManager:
         if not allow_pyramiding:
             return {"allowed": False, "reason": "pyramiding_disabled"}
 
+        if volatility_regime == "HIGH_VOL":
+            return {"allowed": False, "reason": "high_vol_no_pyramiding"}
+
         if trend_state != "STRONG":
             return {"allowed": False, "reason": "pyramiding_requires_strong_trend"}
+
+        # 仅允许盈利加仓
+        if any(float(getattr(p, "profit", 0.0) or 0.0) <= 0 for p in symbol_positions):
+            return {"allowed": False, "reason": "pyramiding_requires_profit"}
 
         # 如已有反向仓位，不允许同symbol反向开新单
         side_mismatch = any(

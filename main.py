@@ -56,7 +56,11 @@ while True:
         df_h1 = apply_indicators(df_h1)
         df_m1 = apply_indicators(df_m1)
 
-        sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1)
+        sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1, diagnostics=True)
+
+        if sig and sig.get("_debug_no_signal"):
+            log_with_time("信号:", s, None, "| 过滤原因:", sig["_debug_no_signal"])
+            continue
 
         log_with_time("信号:", s, sig)
 

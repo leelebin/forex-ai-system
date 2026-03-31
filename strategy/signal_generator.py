@@ -85,11 +85,16 @@ def _m1_entry_filter(direction, df_m1):
     return ok, msg
 
 
-def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
+def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False, diagnostics=False):
     params = load_params()
 
-    if len(df) < 50:
+    def no_signal(reason):
+        if diagnostics:
+            return {"_debug_no_signal": reason}
         return None
+
+    if len(df) < 50:
+        return no_signal("M5数据不足(<50)")
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
@@ -112,9 +117,9 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
         h1_alignment = h1_trend
 
         if trend > 0 and h1_trend < 0:
-            return None
+            return no_signal("H1方向与M5多头冲突")
         if trend < 0 and h1_trend > 0:
-            return None
+            return no_signal("H1方向与M5空头冲突")
 
     if backtest:
         buy_rsi_floor = max(params["rsi_buy"] - 8, 35)
@@ -131,6 +136,10 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
         rsi_up = rsi >= prev_rsi - 0.3
         rsi_down = rsi <= prev_rsi + 0.3
 
+    relaxed_mode = False
+    trend_strength = abs(trend)
+    rsi_momentum = abs(rsi - prev_rsi)
+
     if trend > 0 and buy_rsi_floor <= rsi <= params["rsi_buy"] and bullish_retest and rsi_up:
         direction = "BUY"
         trigger_name = "多头回踩确认"
@@ -139,18 +148,45 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
         direction = "SELL"
         trigger_name = "空头回踩确认"
 
+    # 放宽分支：仅在强趋势场景下启用，并通过更高RR保障期望值
+    elif trend > 0:
+        relaxed_buy_floor = max(params["rsi_buy"] - 12, 32)
+        relaxed_buy_ceil = min(params["rsi_buy"] + 2, 60)
+        if (
+            relaxed_buy_floor <= rsi <= relaxed_buy_ceil
+            and bullish_retest
+            and rsi >= prev_rsi - (1.2 if backtest else 0.8)
+            and trend_strength > 0.00028
+        ):
+            direction = "BUY"
+            trigger_name = "多头趋势延续（放宽）"
+            relaxed_mode = True
+        else:
+            return no_signal("未满足多头触发(标准+放宽)")
+    elif trend < 0:
+        relaxed_sell_floor = max(params["rsi_sell"] - 2, 40)
+        relaxed_sell_ceil = min(params["rsi_sell"] + 12, 68)
+        if (
+            relaxed_sell_floor <= rsi <= relaxed_sell_ceil
+            and bearish_retest
+            and rsi <= prev_rsi + (1.2 if backtest else 0.8)
+            and trend_strength > 0.00028
+        ):
+            direction = "SELL"
+            trigger_name = "空头趋势延续（放宽）"
+            relaxed_mode = True
+        else:
+            return no_signal("未满足空头触发(标准+放宽)")
     else:
-        return None
+        return no_signal("趋势强度不足(ema_fast≈ema_slow)")
 
     if not backtest and atr < params["atr_min"]:
-        return None
+        return no_signal(f"ATR过低({atr:.5f}<{params['atr_min']})")
 
     m1_ok, m1_reason = _m1_entry_filter(direction, df_m1)
     if not backtest and not m1_ok:
-        return None
+        return no_signal("M1微结构过滤未通过")
 
-    trend_strength = abs(trend)
-    rsi_momentum = abs(rsi - prev_rsi)
     atr_baseline = df["atr"].tail(60).mean() if len(df) >= 60 else df["atr"].mean()
 
     dynamic_rr = _calc_dynamic_rr(
@@ -160,6 +196,8 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
         atr,
         atr_baseline,
     )
+    if relaxed_mode:
+        dynamic_rr = max(dynamic_rr, 2.8)
 
     sl_distance = atr * params["atr_sl_multiplier"]
     tp_distance = sl_distance * dynamic_rr
@@ -174,6 +212,8 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False):
     confidence = int(min(95, max(50, 50 + trend_strength * 220 + rsi_momentum * 1.8)))
 
     strategy_labels = ["技术面", "趋势跟随", "RSI动量", "ATR风控", "动态止盈止损"]
+    if relaxed_mode:
+        strategy_labels.append("放宽策略(强趋势+高RR)")
     if h1_alignment is not None:
         strategy_labels.append("多周期共振")
     if df_m1 is not None and len(df_m1) > 0:

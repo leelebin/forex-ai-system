@@ -18,6 +18,7 @@ from risk_model import get_risk_percent
 from strategy.indicators import apply_indicators
 from strategy.signal_generator import generate_signal
 from trend_state import calculate_adx, get_ema_slope, get_trend_state
+from volatility_regime import HIGH_VOL, NORMAL, build_dynamic_sl_tp, classify_volatility_regime
 
 
 def log_with_time(*messages):
@@ -40,6 +41,19 @@ risk_manager = RiskManager(cfg)
 pnl_engine = PnLEngine()
 loss_guard = LossGuard(threshold=2)
 position_manager = PositionManager()
+
+vol_cfg = cfg.get("volatility_regime", {})
+vol_lookback = int(vol_cfg.get("lookback", 60))
+vol_low_ratio = float(vol_cfg.get("low_ratio", 0.8))
+vol_high_ratio = float(vol_cfg.get("high_ratio", 1.35))
+regime_sl_multipliers = vol_cfg.get(
+    "sl_multipliers",
+    {
+        "LOW_VOL": 1.1,
+        "NORMAL": 1.3,
+        "HIGH_VOL": 1.8,
+    },
+)
 
 while True:
     scan_round += 1
@@ -67,6 +81,14 @@ while True:
         df_h1 = apply_indicators(df_h1)
         df_m1 = apply_indicators(df_m1)
 
+        regime_info = classify_volatility_regime(
+            df_m1,
+            lookback=vol_lookback,
+            low_ratio=vol_low_ratio,
+            high_ratio=vol_high_ratio,
+        )
+        volatility_regime = regime_info.get("regime", NORMAL)
+
         sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1, diagnostics=True)
 
         if sig and sig.get("_debug_no_signal"):
@@ -81,6 +103,19 @@ while True:
             confidence_text = sig.get("confidence", "N/A")
             dynamic_rr = sig.get("dynamic_rr", "N/A")
 
+            atr_now = float(df.iloc[-1]["atr"]) if "atr" in df.columns else None
+            sl_dyn, tp_dyn = build_dynamic_sl_tp(
+                entry=float(sig["entry"]),
+                direction=sig["direction"],
+                atr_value=atr_now,
+                rr_ratio=float(dynamic_rr) if dynamic_rr != "N/A" else 2.0,
+                regime=volatility_regime,
+                sl_multipliers=regime_sl_multipliers,
+            )
+            if sl_dyn is not None and tp_dyn is not None:
+                sig["sl"] = sl_dyn
+                sig["tp"] = tp_dyn
+
             setup_msg = f"""
 👀 检测到进场机会（第 {scan_round} 轮）
 
@@ -90,6 +125,7 @@ SL: {sig['sl']}
 TP: {sig['tp']}
 Confidence: {confidence_text}
 Dynamic RR: 1:{dynamic_rr}
+VolRegime: {volatility_regime}
 
 策略组合: {strategy_text}
 触发原因:
@@ -105,6 +141,15 @@ Dynamic RR: 1:{dynamic_rr}
                     f"⏳ {s} 检测到机会但未下单：冷却中，剩余 {remain_sec} 秒。"
                 )
                 send(cfg["telegram_token"], cfg["telegram_chat_id"], cooldown_msg)
+                continue
+
+            if volatility_regime == HIGH_VOL:
+                msg = (
+                    f"🌪️ {s} 当前波动状态={volatility_regime}，禁止新开仓/加仓。"
+                    f" ATR={regime_info.get('atr_current', 'N/A')}, "
+                    f"基线={regime_info.get('atr_mean', 'N/A')}"
+                )
+                send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
                 continue
 
             # 1) trend_state
@@ -160,6 +205,7 @@ Dynamic RR: 1:{dynamic_rr}
                 account_mode=mode,
                 max_positions=mode_controls["max_positions"],
                 allow_pyramiding=mode_controls["allow_pyramiding"],
+                volatility_regime=volatility_regime,
             )
             if not pos_gate.get("allowed"):
                 msg = f"📦 {s} 信号被持仓管理拦截: {pos_gate.get('reason')}"
@@ -222,6 +268,7 @@ AccountMode: {mode}
 Drawdown: {pnl_snapshot['drawdown']}%
 Confidence: {confidence_text}
 Dynamic RR: 1:{dynamic_rr}
+VolRegime: {volatility_regime}
 
 策略组合: {strategy_text}
 触发原因:

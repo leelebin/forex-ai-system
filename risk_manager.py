@@ -47,6 +47,7 @@ class RiskManager:
         self.spread_enabled = bool(spread_cfg.get("enabled", True))
         self.spread_abs_max = float(spread_cfg.get("abs_max", 0.0))
         self.spread_spike_ratio = float(spread_cfg.get("spike_ratio", 2.5))
+        self.spread_trade_block_ratio = float(spread_cfg.get("trade_block_ratio", 1.5))
         self.spread_window = int(spread_cfg.get("window", 40))
         self.spread_cooldown_min = int(spread_cfg.get("cooldown_min", 15))
 
@@ -120,7 +121,11 @@ class RiskManager:
         baseline = sum(history) / len(history)
 
         abs_triggered = self.spread_abs_max > 0 and spread >= self.spread_abs_max
+        over_avg_triggered = baseline > 0 and (spread / baseline) >= self.spread_trade_block_ratio
         spike_triggered = baseline > 0 and (spread / baseline) >= self.spread_spike_ratio
+
+        if over_avg_triggered:
+            return {"blocked": True, "reason": f"spread_over_avg:{(spread / baseline):.2f}x"}
 
         if abs_triggered or spike_triggered:
             cooldown_end = now_utc + timedelta(minutes=self.spread_cooldown_min)

@@ -223,7 +223,15 @@ def place_trade(symbol, direction, lot, sl, tp):
                 sl=sl,
                 tp=tp,
             )
-            return {"ok": True, "reason": "success", "retcode": result.retcode, "filling_mode": fill_mode}
+            return {
+                "ok": True,
+                "reason": "success",
+                "retcode": result.retcode,
+                "filling_mode": fill_mode,
+                "position_ticket": getattr(result, "order", None),
+                "deal_ticket": getattr(result, "deal", None),
+                "executed_price": price,
+            }
 
         reason = result.comment or f"retcode={result.retcode}"
         failure = {"ok": False, "reason": reason, "retcode": result.retcode, "filling_mode": fill_mode}
@@ -281,7 +289,7 @@ def _init_position_state(pos):
     }
 
 
-def manage_positions():
+def manage_positions(event_callback=None):
     positions = get_positions()
 
     if not positions:
@@ -378,6 +386,20 @@ def manage_positions():
                     tp=pos.tp,
                     profit=pos.profit,
                 )
+                if (
+                    event_callback
+                    and current_sl is not None
+                    and target_sl >= entry
+                    and current_sl < entry
+                ):
+                    event_callback(
+                        pos.ticket,
+                        {
+                            "type": "BE",
+                            "price": target_sl,
+                            "profit": pos.profit,
+                        },
+                    )
         elif (not is_buy) and target_sl < current_sl:
             if modify_sltp(pos, new_sl=target_sl):
                 log_trade(
@@ -390,6 +412,20 @@ def manage_positions():
                     tp=pos.tp,
                     profit=pos.profit,
                 )
+                if (
+                    event_callback
+                    and current_sl is not None
+                    and target_sl <= entry
+                    and current_sl > entry
+                ):
+                    event_callback(
+                        pos.ticket,
+                        {
+                            "type": "BE",
+                            "price": target_sl,
+                            "profit": pos.profit,
+                        },
+                    )
 
 
 def log_trade(action, symbol, direction, lot, entry, sl, tp, profit=0):

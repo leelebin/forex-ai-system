@@ -122,5 +122,25 @@
   "telegram_scan_update": {
     "enabled": true,
     "interval_scans": 200
+  },
+  "aggressive_mode": {
+    "enabled": true,
+    "initial_balance": 500,
+    "drawdown_soft": 15.0,
+    "drawdown_hard": 25.0,
+    "symbol_cooldown_sec": 7200,
+    "global_pause_sec": 10800,
+    "whitelist": [
+      "XBRUSD",
+      "AUDJPY",
+      "CHFJPY",
+      "EURUSD"
+    ],
+    "blacklist": [
+      "BTCUSD",
+      "XAGUSD",
+      "US30",
+      "NAS100"
+    ]
   }
 }

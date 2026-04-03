@@ -250,6 +250,38 @@ def get_positions():
     return mt5.positions_get()
 
 
+def close_positions_by_symbol(symbol):
+    """
+    强制平仓指定品种全部持仓（用于 EXTREME 状态）。
+    """
+    positions = mt5.positions_get(symbol=symbol) or []
+    closed = 0
+    for pos in positions:
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            continue
+        is_buy = pos.type == mt5.ORDER_TYPE_BUY
+        close_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY
+        close_price = tick.bid if is_buy else tick.ask
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": pos.volume,
+            "type": close_type,
+            "position": pos.ticket,
+            "price": close_price,
+            "deviation": 30,
+            "magic": 123456,
+            "comment": "Extreme Risk Close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        result = mt5.order_send(request)
+        if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+            closed += 1
+    return {"closed_count": closed, "total": len(positions)}
+
+
 def modify_sltp(position, new_sl=None, new_tp=None):
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
@@ -332,19 +364,21 @@ def manage_positions(event_callback=None):
 
         target_sl = current_sl
 
-        if r_multiple >= 0.8:
-            be_plus = entry + risk * 0.1 if is_buy else entry - risk * 0.1
+        # 更积极 BE：0.5R 即推到 BE
+        if r_multiple >= 0.5:
+            be_plus = entry
             if is_buy:
                 target_sl = max(target_sl, be_plus)
             else:
                 target_sl = min(target_sl, be_plus)
 
-        if r_multiple >= 1.6:
-            lock_60 = entry + risk * 0.6 if is_buy else entry - risk * 0.6
+        # 达到 1R 锁定部分利润（+0.2R）
+        if r_multiple >= 1.0:
+            lock_20 = entry + risk * 0.2 if is_buy else entry - risk * 0.2
             if is_buy:
-                target_sl = max(target_sl, lock_60)
+                target_sl = max(target_sl, lock_20)
             else:
-                target_sl = min(target_sl, lock_60)
+                target_sl = min(target_sl, lock_20)
 
         if reversal is not None and r_multiple >= 1.2:
             reversed_now = (
@@ -362,8 +396,9 @@ def manage_positions(event_callback=None):
                     print(f"⚠️ {pos.symbol} 检测到M1反转，提前锁盈")
                     state["last_stage"] = "REVERSAL_PROTECT"
 
+        # trailing BE：盈利扩张后，用 ATR 跟随保护利润
         atr = reversal["atr"] if reversal else None
-        if atr and atr > 0 and r_multiple >= 2.0:
+        if atr and atr > 0 and r_multiple >= 1.2:
             if is_buy:
                 atr_trail = state["peak_price"] - atr * 1.2
                 target_sl = max(target_sl, atr_trail)

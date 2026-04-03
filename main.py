@@ -19,6 +19,7 @@ from risk_model import get_risk_percent
 from strategy.indicators import apply_indicators
 from strategy.signal_generator import generate_signal
 from trend_state import calculate_adx, get_ema_slope, get_trend_state
+from trade_logger import LOGGER, init_trade_lifecycle
 from utils.monitor import HeartbeatMonitor, setup_logger
 from volatility_regime import HIGH_VOL, NORMAL, build_dynamic_sl_tp, classify_volatility_regime
 
@@ -68,7 +69,7 @@ while True:
     try:
         heartbeat.tick()
         scan_round += 1
-        manage_positions()
+        manage_positions(event_callback=LOGGER.record_event_by_ticket)
 
         log_with_time(f"\n🔄 新一轮扫描（第 {scan_round} 轮）")
 
@@ -79,6 +80,7 @@ while True:
         account = mt5.account_info()
         equity = float(getattr(account, "equity", 0.0) or 0.0)
         pnl_snapshot = pnl_engine.update(equity)
+        market_snapshots = {}
 
         for s in cfg["symbols"]:
             df = pd.DataFrame(get_data(s, "M5"))
@@ -99,6 +101,26 @@ while True:
                 high_ratio=vol_high_ratio,
             )
             volatility_regime = regime_info.get("regime", NORMAL)
+            tick_snapshot = mt5.symbol_info_tick(s)
+            spread_snapshot = None
+            current_price = None
+            if tick_snapshot is not None:
+                bid_val = getattr(tick_snapshot, "bid", None)
+                ask_val = getattr(tick_snapshot, "ask", None)
+                if bid_val is not None and ask_val is not None:
+                    spread_snapshot = abs(float(ask_val) - float(bid_val))
+                current_price = (
+                    float(bid_val)
+                    if bid_val is not None
+                    else (float(ask_val) if ask_val is not None else None)
+                )
+            market_snapshots[s] = {
+                "price": current_price if current_price is not None else float(df.iloc[-1]["close"]),
+                "atr": float(df.iloc[-1]["atr"]) if "atr" in df.columns else None,
+                "rsi": float(df.iloc[-1]["rsi"]) if "rsi" in df.columns else None,
+                "spread": spread_snapshot,
+                "market_state": volatility_regime,
+            }
 
             sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1, diagnostics=True)
 
@@ -273,6 +295,31 @@ Lot: {lot}
                     continue
 
                 logger.info("Order executed for %s %s lot=%s", s, sig["direction"], lot)
+                executed_price = (
+                    trade_result.get("executed_price")
+                    if isinstance(trade_result, dict)
+                    else sig["entry"]
+                )
+                order_payload = {
+                    "symbol": s,
+                    "open_price": float(executed_price),
+                    "volume": float(lot),
+                    "direction": str(sig["direction"]).lower(),
+                    "position_ticket": trade_result.get("position_ticket"),
+                    "sl": sig["sl"],
+                    "tp": sig["tp"],
+                    "entry_reason": reason_text,
+                    "signal_score": confidence_text,
+                    "volatility_flag": volatility_regime != NORMAL,
+                    "initial_features": {
+                        "atr": float(df.iloc[-1]["atr"]) if "atr" in df.columns else None,
+                        "rsi": float(df.iloc[-1]["rsi"]) if "rsi" in df.columns else None,
+                        "spread": spread_snapshot,
+                        "trend_direction": trend,
+                        "market_state": volatility_regime,
+                    },
+                }
+                init_trade_lifecycle(order_payload)
                 success_msg = f"""
 🚨 自动交易执行
 
@@ -297,6 +344,9 @@ VolRegime: {volatility_regime}
 
                 send(cfg["telegram_token"], cfg["telegram_chat_id"], success_msg)
                 cooldown[s] = now
+
+        open_positions = mt5.positions_get() or []
+        LOGGER.sync_open_positions(open_positions, market_snapshots)
 
         time.sleep(15)
 

@@ -7,6 +7,12 @@ import MetaTrader5 as mt5
 import pandas as pd
 
 from account_mode import get_account_mode, get_mode_controls
+from aggressive_mode import (
+    AggressiveModeController,
+    adjust_risk_by_volatility,
+    get_risk_percent as get_aggressive_risk_percent,
+    should_add_position,
+)
 from data.mt5_connector import connect, get_data
 from execution.mt5_trader import close_positions_by_symbol, manage_positions, place_trade
 from extreme_market_protection import extreme_market_protection
@@ -151,6 +157,9 @@ pnl_engine = PnLEngine()
 loss_guard = LossGuard(threshold=2)
 position_manager = PositionManager()
 extreme_state_store = {}
+aggressive_controller = AggressiveModeController(cfg)
+aggr_peak_balance = float(getattr(mt5.account_info(), "equity", 0.0) or 0.0)
+processed_deals = set()
 
 vol_cfg = cfg.get("volatility_regime", {})
 vol_lookback = int(vol_cfg.get("lookback", 60))
@@ -178,10 +187,14 @@ while True:
 
         account = mt5.account_info()
         equity = float(getattr(account, "equity", 0.0) or 0.0)
+        aggr_peak_balance = max(aggr_peak_balance, equity)
         pnl_snapshot = pnl_engine.update(equity)
         market_snapshots = {}
 
         for s in cfg["symbols"]:
+            if aggressive_controller.enabled and not aggressive_controller.is_symbol_allowed(s):
+                continue
+
             df = pd.DataFrame(get_data(s, "M5"))
             df_h1 = pd.DataFrame(get_data(s, "H1"))
             df_m1 = pd.DataFrame(get_data(s, "M1", n=1500))
@@ -376,11 +389,31 @@ VolRegime: {market_snapshots[s]['market_state']}
                     send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
                     continue
 
-                dynamic_risk_percent = get_risk_percent(
-                    equity=equity,
-                    drawdown=pnl_snapshot["drawdown"],
-                    is_new_peak=pnl_snapshot["is_new_peak"],
-                )
+                if aggressive_controller.enabled:
+                    time_gate = aggressive_controller.can_trade_now(s, now_ts=time.time())
+                    if time_gate.get("blocked"):
+                        send(cfg["telegram_token"], cfg["telegram_chat_id"], f"⏸️ {s} Aggressive风控暂停: {time_gate.get('reason')}")
+                        continue
+
+                    drawdown_gate = aggressive_controller.check_drawdown_control(
+                        balance=equity,
+                        peak_balance=aggr_peak_balance,
+                    )
+                    if not drawdown_gate.allow_trade:
+                        send(cfg["telegram_token"], cfg["telegram_chat_id"], f"🛑 回撤超限，停止交易。DD={drawdown_gate.drawdown_pct:.2f}%")
+                        continue
+
+                    dynamic_risk_percent = get_aggressive_risk_percent(equity)
+                    dynamic_risk_percent *= drawdown_gate.risk_multiplier
+                    dynamic_risk_percent *= aggressive_controller.get_profit_protection_multiplier(equity)
+                    if aggressive_controller.ultra_low_risk_mode:
+                        dynamic_risk_percent = 1.0
+                else:
+                    dynamic_risk_percent = get_risk_percent(
+                        equity=equity,
+                        drawdown=pnl_snapshot["drawdown"],
+                        is_new_peak=pnl_snapshot["is_new_peak"],
+                    )
 
                 pos_gate = position_manager.can_open(
                     symbol=s,
@@ -396,6 +429,20 @@ VolRegime: {market_snapshots[s]['market_state']}
                     send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
                     continue
 
+                ema50 = float(df_h1["close"].ewm(span=50, adjust=False).mean().iloc[-1])
+                ema200 = float(df_h1["close"].ewm(span=200, adjust=False).mean().iloc[-1])
+                if aggressive_controller.enabled and not aggressive_controller.trend_direction_allowed(sig["direction"], ema50, ema200):
+                    send(cfg["telegram_token"], cfg["telegram_chat_id"], f"🚫 {s} 趋势方向不一致，跳过。EMA50={ema50:.5f}, EMA200={ema200:.5f}")
+                    continue
+
+                vol_adj = adjust_risk_by_volatility(
+                    atr=market_snapshots[s].get("atr"),
+                    atr_avg=market_snapshots[s].get("atr_mean"),
+                )
+                if aggressive_controller.enabled and not vol_adj.get("allow_trade", True):
+                    send(cfg["telegram_token"], cfg["telegram_chat_id"], f"🛑 {s} ATR极端波动，禁止交易。")
+                    continue
+
                 lot = calculate_lot(
                     s,
                     sig["sl"],
@@ -403,6 +450,9 @@ VolRegime: {market_snapshots[s]['market_state']}
                     equity,
                     risk_percent=dynamic_risk_percent,
                 )
+                if aggressive_controller.enabled:
+                    lot *= float(vol_adj.get("lot_multiplier", 1.0))
+                    lot *= float(aggressive_controller.get_cycle_lot_multiplier())
 
                 trade_result = place_trade(
                     s,
@@ -458,6 +508,9 @@ Lot: {lot}
                     "sl": sig["sl"],
                     "tp": sig["tp"],
                     "entry_reason": reason_text,
+                    "trend_state": "UP" if ema50 > ema200 else "DOWN",
+                    "atr_level": vol_adj.get("atr_level", "normal"),
+                    "position_stage": "initial",
                     "signal_score": confidence_text,
                     "volatility_flag": market_snapshots[s]["market_state"] != NORMAL,
                     "initial_features": {
@@ -465,7 +518,10 @@ Lot: {lot}
                         "rsi": float(df.iloc[-1]["rsi"]) if "rsi" in df.columns else None,
                         "spread": spread_snapshot,
                         "trend_direction": trend,
+                        "trend_state": "UP" if ema50 > ema200 else "DOWN",
+                        "atr_level": vol_adj.get("atr_level", "normal"),
                         "market_state": market_snapshots[s]["market_state"],
+                        "position_stage": "initial",
                     },
                 }
                 init_trade_lifecycle(order_payload)
@@ -494,8 +550,50 @@ VolRegime: {market_snapshots[s]['market_state']}
                 send(cfg["telegram_token"], cfg["telegram_chat_id"], success_msg)
                 cooldown[s] = now
 
+        if aggressive_controller.enabled:
+            open_positions = mt5.positions_get() or []
+            for p in open_positions:
+                if not aggressive_controller.is_symbol_allowed(p.symbol):
+                    continue
+                info = {
+                    "profit": float(getattr(p, "profit", 0.0) or 0.0),
+                    "add_count": aggressive_controller.position_add_count[p.ticket],
+                }
+                risk_unit = abs(float(p.price_open) - float(p.sl or p.price_open))
+                if risk_unit <= 0:
+                    continue
+                tick = mt5.symbol_info_tick(p.symbol)
+                if tick is None:
+                    continue
+                mark = float(tick.bid if p.type == mt5.ORDER_TYPE_BUY else tick.ask)
+                favorable = (mark - p.price_open) if p.type == mt5.ORDER_TYPE_BUY else (p.price_open - mark)
+                info["r_multiple"] = favorable / risk_unit
+                if not should_add_position(info):
+                    continue
+
+                add_mult = 0.5 if aggressive_controller.position_add_count[p.ticket] == 0 else 0.3
+                add_lot = max(0.01, round(float(p.volume) * add_mult, 2))
+                add_dir = "BUY" if p.type == mt5.ORDER_TYPE_BUY else "SELL"
+                add_result = place_trade(p.symbol, add_dir, add_lot, p.sl, p.tp)
+                if add_result and add_result.get("ok"):
+                    aggressive_controller.position_add_count[p.ticket] += 1
+
         open_positions = mt5.positions_get() or []
         LOGGER.sync_open_positions(open_positions, market_snapshots)
+
+        if aggressive_controller.enabled:
+            now_utc = datetime.now(timezone.utc)
+            hist = mt5.history_deals_get(now_utc.replace(hour=0, minute=0, second=0, microsecond=0), now_utc) or []
+            for deal in hist[-20:]:
+                if getattr(deal, "entry", None) != mt5.DEAL_ENTRY_OUT:
+                    continue
+                deal_ticket = int(getattr(deal, "ticket", 0) or 0)
+                if deal_ticket in processed_deals:
+                    continue
+                symbol = getattr(deal, "symbol", "")
+                pnl_val = float(getattr(deal, "profit", 0.0) or 0.0) + float(getattr(deal, "commission", 0.0) or 0.0) + float(getattr(deal, "swap", 0.0) or 0.0)
+                aggressive_controller.record_trade_result(symbol=symbol, pnl=pnl_val)
+                processed_deals.add(deal_ticket)
 
         tg_cfg = cfg.get("telegram_scan_update", {})
         if tg_cfg.get("enabled", True):

@@ -10,17 +10,20 @@ import MetaTrader5 as mt5
 
 def get_risk_percent(balance: float) -> float:
     """
-    分阶段风险系统（Aggressive Mode）:
-    - 阶段1: balance <= 800    -> 5%
-    - 阶段2: 800 < balance <= 1500 -> 3%
-    - 阶段3: balance > 1500    -> 1%
+    分阶段风险系统（成长型激进模式）:
+    - TURBO   : balance <= 1000  -> 8%   ($500 起步阶段，最高激进)
+    - HIGH    : balance <= 2000  -> 6%   (冲刺至目标$2000)
+    - GROWTH  : balance <= 5000  -> 3.5% (过渡阶段，开始保护)
+    - MODERATE: balance > 5000   -> 1.5% (保守模式)
     """
     balance = float(balance or 0.0)
-    if balance <= 800:
-        return 5.0
-    if balance <= 1500:
-        return 3.0
-    return 1.0
+    if balance <= 1_000:
+        return 8.0
+    if balance <= 2_000:
+        return 6.0
+    if balance <= 5_000:
+        return 3.5
+    return 1.5
 
 
 def should_add_position(position: dict) -> bool:
@@ -161,14 +164,24 @@ class AggressiveModeController:
         return DrawdownControl(allow_trade=True, risk_multiplier=1.0, drawdown_pct=drawdown_pct)
 
     def get_profit_protection_multiplier(self, balance: float) -> float:
+        """
+        利润保护乘数（在阶段风险基础上再叠加一层保护）:
+        - 余额未超过 $5000 (< +900% from $500): 全速前进，不限制
+        - 余额到达 $5000 (+900%): 风险 × 0.7
+        - 余额超过 $10000 (+1900%): 风险 × 0.5（彻底进入保守模式）
+        关键变化：不在$2000时触发保护，避免阻碍冲刺目标。
+        """
         base = max(self.initial_balance, 1e-9)
         growth = (float(balance or 0.0) - base) / base
-        if growth >= 1.0:  # +100%
+        if growth >= 19.0:  # balance ~= $10 000 (from $500)
             self.ultra_low_risk_mode = True
-            return 0.2
-        if growth >= 0.3:  # +30%
-            self.locked_profit_mode = True
             return 0.5
+        if growth >= 9.0:   # balance ~= $5 000 (from $500)
+            self.locked_profit_mode = True
+            return 0.7
+        # TURBO / GROWTH 阶段: 不做额外削减
+        self.ultra_low_risk_mode = False
+        self.locked_profit_mode = False
         return 1.0
 
     def get_cycle_lot_multiplier(self) -> float:

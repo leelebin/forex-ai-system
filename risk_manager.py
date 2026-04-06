@@ -32,6 +32,37 @@ def get_symbol_type(symbol):
         return "other"
 
 
+def get_open_currency_exposure(open_positions) -> dict:
+    """Return a count of open positions per 3-letter currency code.
+
+    Works with both MT5 position objects and plain dicts.
+    """
+    from collections import Counter
+    currencies: Counter = Counter()
+    for pos in open_positions:
+        sym = (
+            pos.symbol if hasattr(pos, "symbol") else str(pos.get("symbol", ""))
+        ).upper()
+        if len(sym) >= 6:
+            currencies[sym[:3]] += 1
+            currencies[sym[3:6]] += 1
+    return dict(currencies)
+
+
+def is_currency_overexposed(symbol: str, open_positions, max_exposure: int = 2) -> bool:
+    """Return True if opening *symbol* would push any of its currencies above *max_exposure*.
+
+    Example: max_exposure=2 means at most 2 positions per currency (EUR, USD, JPY …).
+    """
+    symbol = symbol.upper()
+    exposure = get_open_currency_exposure(open_positions)
+    if len(symbol) >= 6:
+        for currency in (symbol[:3], symbol[3:6]):
+            if exposure.get(currency, 0) >= max_exposure:
+                return True
+    return False
+
+
 class RiskManager:
     def __init__(self, cfg: Dict[str, Any]):
         module_cfg = cfg.get("risk_manager", {})

@@ -1,5 +1,6 @@
 import csv
 import os
+import time
 from datetime import datetime
 
 import MetaTrader5 as mt5
@@ -7,6 +8,10 @@ import pandas as pd
 
 
 POSITION_STATE = {}
+
+# M1 data cache: {symbol: {"ts": float, "df": pd.DataFrame}}
+_m1_cache: dict = {}
+_M1_CACHE_TTL = 60  # seconds — re-fetch at most once per minute per symbol
 
 
 def _safe_ema(series, span):
@@ -48,11 +53,16 @@ def _resolve_filling_modes(symbol_info):
 
 
 def _get_m1_reversal_signal(symbol):
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 120)
-    if rates is None or len(rates) < 40:
-        return None
-
-    df = pd.DataFrame(rates)
+    now = time.time()
+    cached = _m1_cache.get(symbol)
+    if cached and (now - cached["ts"]) < _M1_CACHE_TTL:
+        df = cached["df"]
+    else:
+        rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 120)
+        if rates is None or len(rates) < 40:
+            return None
+        df = pd.DataFrame(rates)
+        _m1_cache[symbol] = {"ts": now, "df": df}
     df["ema_fast"] = _safe_ema(df["close"], 9)
     df["ema_slow"] = _safe_ema(df["close"], 21)
 

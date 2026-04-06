@@ -27,12 +27,14 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> float:
         axis=1,
     ).max(axis=1)
 
-    atr = tr.rolling(period).mean()
-    plus_di = 100 * (plus_dm.rolling(period).mean() / atr.replace(0, pd.NA))
-    minus_di = 100 * (minus_dm.rolling(period).mean() / atr.replace(0, pd.NA))
+    # Wilder's smoothing: EWM with alpha=1/period (standard ADX definition)
+    alpha = 1.0 / period
+    atr = tr.ewm(alpha=alpha, adjust=False).mean()
+    plus_di = 100 * (plus_dm.ewm(alpha=alpha, adjust=False).mean() / atr.replace(0, pd.NA))
+    minus_di = 100 * (minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr.replace(0, pd.NA))
 
     dx = ((plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)) * 100
-    adx = dx.rolling(period).mean().fillna(0.0)
+    adx = dx.ewm(alpha=alpha, adjust=False).mean().fillna(0.0)
     return float(adx.iloc[-1])
 
 

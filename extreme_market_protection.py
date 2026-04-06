@@ -45,7 +45,11 @@ def extreme_market_protection(
         and float(atr_now) > float(settings.get("atr_spike_ratio", 2.0)) * float(atr_mean)
     ):
         reasons.append("atr_spike_extreme")
-    if gap_ratio is not None and float(gap_ratio) >= float(settings.get("gap_ratio_threshold", 1.5)):
+    # Use per-symbol threshold from snapshot if provided, otherwise fall back to config
+    _gap_threshold = float(
+        snapshot.get("gap_ratio_threshold") or settings.get("gap_ratio_threshold", 1.5)
+    )
+    if gap_ratio is not None and float(gap_ratio) >= _gap_threshold:
         reasons.append("gap_extreme")
     if int(consecutive_losses) >= int(settings.get("max_consecutive_losses", 3)):
         reasons.append("loss_streak_extreme")

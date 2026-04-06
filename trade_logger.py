@@ -1,11 +1,133 @@
+import datetime as _dt
 import json
 import os
 import queue
 import random
+import sqlite3
 import threading
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
+
+_DB_PATH = os.path.join("logs", "trades.db")
+_LOG_RETENTION_DAYS = 30
+
+
+def _init_db():
+    """Create SQLite DB + trades table if they don't exist, then clean up old JSON logs."""
+    os.makedirs("logs", exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trades (
+            trade_id        TEXT PRIMARY KEY,
+            symbol          TEXT,
+            direction       TEXT,
+            open_time       TEXT,
+            close_time      TEXT,
+            open_price      REAL,
+            close_price     REAL,
+            volume          REAL,
+            pnl             REAL,
+            max_drawdown    REAL,
+            max_profit      REAL,
+            holding_seconds INTEGER,
+            win             INTEGER,
+            entry_reason    TEXT,
+            trend_state     TEXT,
+            signal_score    REAL,
+            atr_level       TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+    _cleanup_old_json_logs()
+
+
+def _upsert_trade_db(trade: dict):
+    """Insert or replace a closed trade record in SQLite."""
+    result = trade.get("result", {})
+    pnl = float(result.get("pnl", 0.0) or 0.0)
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                trade.get("trade_id", ""),
+                trade.get("symbol", ""),
+                trade.get("direction", ""),
+                trade.get("open_time", ""),
+                trade.get("close_time", ""),
+                float(trade.get("open_price", 0.0) or 0.0),
+                float(trade.get("close_price", 0.0) or 0.0),
+                float(trade.get("volume", 0.0) or 0.0),
+                pnl,
+                float(result.get("max_drawdown", 0.0) or 0.0),
+                float(result.get("max_profit", 0.0) or 0.0),
+                int(result.get("holding_seconds", 0) or 0),
+                1 if pnl > 0 else 0,
+                trade.get("entry_reason", "") or "",
+                trade.get("trend_state", "") or "",
+                float(trade.get("signal_score", 0.0) or 0.0),
+                trade.get("atr_level", "") or "",
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # logging must not crash the trading loop
+
+
+def write_daily_summary(date_str: str = None):
+    """Write a CSV summary of all closed trades for *date_str* (defaults to today)."""
+    if date_str is None:
+        date_str = _dt.date.today().isoformat()
+    if not os.path.exists(_DB_PATH):
+        return
+    try:
+        conn = sqlite3.connect(_DB_PATH)
+        rows = conn.execute(
+            """
+            SELECT symbol,
+                   COUNT(*) AS trades,
+                   SUM(CASE WHEN win=1 THEN 1 ELSE 0 END) AS wins,
+                   SUM(pnl) AS total_pnl
+            FROM trades
+            WHERE date(open_time) = ?
+            GROUP BY symbol
+            ORDER BY symbol
+            """,
+            (date_str,),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return
+        summary_path = os.path.join("logs", f"daily_{date_str}.csv")
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write("symbol,trades,wins,win_rate_pct,total_pnl\n")
+            for symbol, trades, wins, total_pnl in rows:
+                win_rate = (wins / trades * 100) if trades > 0 else 0.0
+                f.write(f"{symbol},{trades},{wins},{win_rate:.1f},{total_pnl:.2f}\n")
+    except Exception:
+        pass
+
+
+def _cleanup_old_json_logs(days_to_keep: int = _LOG_RETENTION_DAYS):
+    """Delete per-trade JSON files older than *days_to_keep* days."""
+    log_dir = os.path.join("logs", "trades")
+    if not os.path.exists(log_dir):
+        return
+    cutoff = time.time() - (days_to_keep * 86400)
+    try:
+        for fname in os.listdir(log_dir):
+            fpath = os.path.join(log_dir, fname)
+            if os.path.isfile(fpath) and os.path.getmtime(fpath) < cutoff:
+                os.remove(fpath)
+    except Exception:
+        pass
+
+
+# Initialise DB on module import
+_init_db()
 class TradeLifecycleLogger:
     def __init__(self, base_dir="logs/trades", flush_interval_sec=10):
         self.base_dir = base_dir
@@ -252,6 +374,7 @@ class TradeLifecycleLogger:
 
             self.closed_trades[trade_id] = trade
             self._enqueue_write(trade_id, trade)
+            _upsert_trade_db(trade)
             return trade
 
     def _infer_close_type(self, trade):

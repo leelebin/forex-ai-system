@@ -161,7 +161,10 @@ extreme_state_store = {}
 aggressive_controller = AggressiveModeController(cfg)
 aggr_peak_balance = float(getattr(mt5.account_info(), "equity", 0.0) or 0.0)
 processed_deals = set()
-daily_loss_guard = DailyLossGuard(max_daily_loss_pct=float(cfg.get("daily_loss_limit_pct", 5.0)))
+daily_loss_guard = DailyLossGuard(
+    max_daily_loss_pct=float(cfg.get("daily_loss_limit_pct", 5.0)),
+    tiers=cfg.get("daily_loss_tiers", []),
+)
 
 vol_cfg = cfg.get("volatility_regime", {})
 vol_lookback = int(vol_cfg.get("lookback", 60))
@@ -196,14 +199,15 @@ while True:
         # Daily loss guard — update baseline and check before scanning symbols
         daily_loss_guard.update(equity)
         if daily_loss_guard.is_blocked(equity):
+            _dloss_pct = daily_loss_guard.daily_loss_pct(equity)
+            _dloss_cap = daily_loss_guard.effective_limit_pct
             log_with_time(
-                f"🛑 每日亏损限制已触发 ({daily_loss_guard.daily_loss_pct(equity):.1f}% >= "
-                f"{daily_loss_guard.max_pct}%)，本轮跳过所有开仓。"
+                f"🛑 每日亏损限制已触发 ({_dloss_pct:.1f}% >= {_dloss_cap:.1f}%)，本轮跳过所有开仓。"
             )
             send(
                 cfg["telegram_token"],
                 cfg["telegram_chat_id"],
-                f"🛑 每日亏损限制 {daily_loss_guard.daily_loss_pct(equity):.1f}% 已触发，今日不再开新仓。",
+                f"🛑 每日亏损 {_dloss_pct:.1f}% 已触发上限 {_dloss_cap:.1f}%，今日不再开新仓。",
             )
             time.sleep(15)
             continue

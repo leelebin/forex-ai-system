@@ -124,7 +124,12 @@
     "enabled": true,
     "interval_scans": 200
   },
-  "daily_loss_limit_pct": 5.0,
+  "daily_loss_limit_pct": 20.0,
+  "daily_loss_tiers": [
+    {"balance_max": 2000, "max_pct": 20.0},
+    {"balance_max": 5000, "max_pct": 12.0},
+    {"balance_max": null,  "max_pct": 5.0}
+  ],
   "max_currency_exposure": 2,
   "symbol_group_params": {
     "forex_major": {
@@ -197,21 +202,34 @@
   "aggressive_mode": {
     "enabled": true,
     "initial_balance": 500,
-    "drawdown_soft": 15.0,
-    "drawdown_hard": 25.0,
-    "symbol_cooldown_sec": 7200,
-    "global_pause_sec": 10800,
+    "drawdown_soft": 30.0,
+    "drawdown_hard": 50.0,
+    "symbol_cooldown_sec": 3600,
+    "global_pause_sec": 5400,
     "whitelist": [
-      "XBRUSD",
+      "EURUSD",
+      "GBPUSD",
+      "USDJPY",
+      "AUDUSD",
       "AUDJPY",
       "CHFJPY",
-      "EURUSD"
+      "GBPJPY",
+      "XAUUSD",
+      "XBRUSD"
     ],
     "blacklist": [
       "BTCUSD",
-      "XAGUSD",
+      "ETHUSD",
       "US30",
-      "NAS100"
+      "NAS100",
+      "SPX500",
+      "GER40",
+      "UK100",
+      "XAGUSD",
+      "USDHKD",
+      "USDSGD",
+      "USDTRY",
+      "USDZAR"
     ]
   }
 }

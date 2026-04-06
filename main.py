@@ -22,7 +22,8 @@ from news_filter import NewsFilter
 from notifier.telegram import send
 from pnl_engine import PnLEngine
 from position_manager import PositionManager
-from risk_manager import RiskManager, calculate_lot
+from daily_loss_guard import DailyLossGuard
+from risk_manager import RiskManager, calculate_lot, get_symbol_type, is_currency_overexposed
 from risk_model import get_risk_percent
 from strategy.indicators import apply_indicators
 from strategy.signal_generator import generate_signal
@@ -160,6 +161,7 @@ extreme_state_store = {}
 aggressive_controller = AggressiveModeController(cfg)
 aggr_peak_balance = float(getattr(mt5.account_info(), "equity", 0.0) or 0.0)
 processed_deals = set()
+daily_loss_guard = DailyLossGuard(max_daily_loss_pct=float(cfg.get("daily_loss_limit_pct", 5.0)))
 
 vol_cfg = cfg.get("volatility_regime", {})
 vol_lookback = int(vol_cfg.get("lookback", 60))
@@ -191,9 +193,32 @@ while True:
         pnl_snapshot = pnl_engine.update(equity)
         market_snapshots = {}
 
+        # Daily loss guard — update baseline and check before scanning symbols
+        daily_loss_guard.update(equity)
+        if daily_loss_guard.is_blocked(equity):
+            log_with_time(
+                f"🛑 每日亏损限制已触发 ({daily_loss_guard.daily_loss_pct(equity):.1f}% >= "
+                f"{daily_loss_guard.max_pct}%)，本轮跳过所有开仓。"
+            )
+            send(
+                cfg["telegram_token"],
+                cfg["telegram_chat_id"],
+                f"🛑 每日亏损限制 {daily_loss_guard.daily_loss_pct(equity):.1f}% 已触发，今日不再开新仓。",
+            )
+            time.sleep(15)
+            continue
+
         for s in cfg["symbols"]:
             if aggressive_controller.enabled and not aggressive_controller.is_symbol_allowed(s):
                 continue
+
+            # Session gate: skip symbols restricted to certain UTC hours (e.g. indices)
+            _s_group_params = cfg.get("symbol_group_params", {}).get(get_symbol_type(s), {})
+            _trading_hours = _s_group_params.get("trading_hours_utc")
+            if _trading_hours is not None:
+                _utc_hour = datetime.now(timezone.utc).hour
+                if not (_trading_hours[0] <= _utc_hour < _trading_hours[1]):
+                    continue
 
             df = pd.DataFrame(get_data(s, "M5"))
             df_h1 = pd.DataFrame(get_data(s, "H1"))
@@ -235,6 +260,7 @@ while True:
             prev_close = _safe_float(df_m1.iloc[-2]["close"]) if len(df_m1) > 1 else None
             last_open = _safe_float(df_m1.iloc[-1]["open"]) if "open" in df_m1.columns else None
             gap_ratio = None
+            _gap_ratio_max = float(_s_group_params.get("gap_ratio_max", 0.01))
             if prev_close is not None and last_open is not None and prev_close != 0:
                 gap_ratio = abs(last_open - prev_close) / abs(prev_close)
 
@@ -249,6 +275,7 @@ while True:
                 "spread_mean": spread_mean,
                 "candle_range": candle_range,
                 "gap_ratio": gap_ratio,
+                "gap_ratio_threshold": _gap_ratio_max,
                 "market_state": volatility_regime,
             }
 
@@ -275,7 +302,7 @@ while True:
                         f"🚨 {s} EXTREME 状态触发强平: {close_result['closed_count']}/{close_result['total']}",
                     )
 
-            sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1, diagnostics=True)
+            sig = generate_signal(df, bias, s, df_h1=df_h1, df_m1=df_m1, diagnostics=True, cfg=cfg)
 
             if sig and sig.get("_debug_no_signal"):
                 log_with_time("信号:", s, None, "| 过滤原因:", sig["_debug_no_signal"])
@@ -387,6 +414,13 @@ VolRegime: {market_snapshots[s]['market_state']}
                         f"(恢复时间: {risk_gate.get('resume_at_utc', 'N/A')})"
                     )
                     send(cfg["telegram_token"], cfg["telegram_chat_id"], msg)
+                    continue
+
+                # Currency correlation gate: block if any currency in the pair
+                # already has too many open positions
+                _max_currency_exp = int(cfg.get("max_currency_exposure", 2))
+                if is_currency_overexposed(s, mt5.positions_get() or [], _max_currency_exp):
+                    log_with_time(f"[GATE] {s} 货币暴露过度，跳过（max={_max_currency_exp}）")
                     continue
 
                 if aggressive_controller.enabled:

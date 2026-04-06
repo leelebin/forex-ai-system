@@ -94,7 +94,8 @@
     "use_mt5_symbols": false,
     "starting_balance": 500,
     "risk_percent": 1,
-    "max_holding_bars": 24
+    "max_holding_bars": 24,
+    "bars": 50000
   },
   "signal_filters": {
     "enabled": true,
@@ -122,6 +123,76 @@
   "telegram_scan_update": {
     "enabled": true,
     "interval_scans": 200
+  },
+  "daily_loss_limit_pct": 5.0,
+  "max_currency_exposure": 2,
+  "symbol_group_params": {
+    "forex_major": {
+      "atr_sl_multiplier": 1.3,
+      "rr_min": 1.4,
+      "rr_max": 3.0,
+      "rsi_buy": 52,
+      "rsi_sell": 48,
+      "spread_max_pips": 0.003,
+      "gap_ratio_max": 0.01,
+      "max_holding_bars": 24,
+      "trading_hours_utc": null
+    },
+    "forex_cross": {
+      "atr_sl_multiplier": 1.5,
+      "rr_min": 1.4,
+      "rr_max": 3.0,
+      "rsi_buy": 52,
+      "rsi_sell": 48,
+      "spread_max_pips": 0.004,
+      "gap_ratio_max": 0.012,
+      "max_holding_bars": 24,
+      "trading_hours_utc": null
+    },
+    "metal": {
+      "atr_sl_multiplier": 1.8,
+      "rr_min": 1.6,
+      "rr_max": 3.2,
+      "rsi_buy": 54,
+      "rsi_sell": 46,
+      "spread_max_pips": 0.5,
+      "gap_ratio_max": 0.008,
+      "max_holding_bars": 48,
+      "trading_hours_utc": null
+    },
+    "index": {
+      "atr_sl_multiplier": 1.6,
+      "rr_min": 1.5,
+      "rr_max": 3.0,
+      "rsi_buy": 55,
+      "rsi_sell": 45,
+      "spread_max_pips": 2.0,
+      "gap_ratio_max": 0.004,
+      "max_holding_bars": 32,
+      "trading_hours_utc": [13, 20]
+    },
+    "oil": {
+      "atr_sl_multiplier": 1.6,
+      "rr_min": 1.5,
+      "rr_max": 3.0,
+      "rsi_buy": 53,
+      "rsi_sell": 47,
+      "spread_max_pips": 0.05,
+      "gap_ratio_max": 0.01,
+      "max_holding_bars": 32,
+      "trading_hours_utc": null
+    },
+    "crypto": {
+      "atr_sl_multiplier": 2.0,
+      "rr_min": 2.0,
+      "rr_max": 3.5,
+      "rsi_buy": 55,
+      "rsi_sell": 45,
+      "spread_max_pips": 10.0,
+      "gap_ratio_max": 0.025,
+      "max_holding_bars": 96,
+      "trading_hours_utc": null
+    }
   },
   "aggressive_mode": {
     "enabled": true,

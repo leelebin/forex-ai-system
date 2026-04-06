@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 
 
 def load_params():
@@ -15,7 +16,19 @@ def load_params():
     }
 
 
-def _calc_dynamic_rr(base_rr, trend_strength, rsi_momentum, atr, atr_baseline):
+def get_group_params(symbol: str, cfg: dict) -> dict:
+    """Return symbol-group-specific strategy overrides from config, falling back to forex_major defaults."""
+    # Import here to avoid circular import at module load time
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _root not in sys.path:
+        sys.path.insert(0, _root)
+    from risk_manager import get_symbol_type
+    group = get_symbol_type(symbol)
+    group_defaults = cfg.get("symbol_group_params", {})
+    return group_defaults.get(group, group_defaults.get("forex_major", {}))
+
+
+def _calc_dynamic_rr(base_rr, trend_strength, rsi_momentum, atr, atr_baseline, rr_min=1.4, rr_max=3.0):
     if atr_baseline <= 0:
         atr_baseline = atr
 
@@ -43,7 +56,7 @@ def _calc_dynamic_rr(base_rr, trend_strength, rsi_momentum, atr, atr_baseline):
     elif vol_factor < 0.9:
         rr += 0.2
 
-    return max(1.4, min(4.2, rr))
+    return max(rr_min, min(rr_max, rr))
 
 
 def _m1_entry_filter(direction, df_m1):
@@ -85,8 +98,23 @@ def _m1_entry_filter(direction, df_m1):
     return ok, msg
 
 
-def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False, diagnostics=False):
+def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False, diagnostics=False, cfg=None):
     params = load_params()
+
+    # Apply per-symbol-group overrides (ATR multiplier, RSI thresholds)
+    if cfg is not None:
+        gp = get_group_params(symbol, cfg)
+        if gp.get("atr_sl_multiplier"):
+            params["atr_sl_multiplier"] = gp["atr_sl_multiplier"]
+        if gp.get("rsi_buy"):
+            params["rsi_buy"] = gp["rsi_buy"]
+        if gp.get("rsi_sell"):
+            params["rsi_sell"] = gp["rsi_sell"]
+        _rr_min = float(gp.get("rr_min", 1.4))
+        _rr_max = float(gp.get("rr_max", 3.0))
+    else:
+        _rr_min = 1.4
+        _rr_max = 3.0
 
     def no_signal(reason):
         if diagnostics:
@@ -195,6 +223,8 @@ def generate_signal(df, news, symbol, df_h1=None, df_m1=None, backtest=False, di
         rsi_momentum,
         atr,
         atr_baseline,
+        rr_min=_rr_min,
+        rr_max=_rr_max,
     )
     if relaxed_mode:
         dynamic_rr = max(dynamic_rr, 2.8)
